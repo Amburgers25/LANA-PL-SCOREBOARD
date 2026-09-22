@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Lana Straw Live Scores</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #152036;
+      --line: #24324c;
+      --text: #f4f7fb;
+      --muted: #93a4c3;
+      --good: #3dd68c;
+      --bad: #ff6b7a;
+      --accent: #7aa2ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #1b2b4d 0%, var(--bg) 45%);
+      color: var(--text);
+      min-height: 100dvh;
+    }
+    header {
+      padding: 18px 16px 8px;
+      position: sticky;
+      top: 0;
+      background: linear-gradient(180deg, #0b1220 70%, transparent);
+      z-index: 2;
+    }
+    h1 { font-size: 1.15rem; margin: 0; letter-spacing: .02em; }
+    .sub { color: var(--muted); font-size: .82rem; margin-top: 4px; }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 10px 16px 0;
+    }
+    button.tab {
+      border: 0;
+      background: var(--card);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-weight: 600;
+    }
+    button.tab.active { background: var(--accent); color: #081018; }
+    main { padding: 12px 16px 32px; display: grid; gap: 10px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
+    }
+    .match {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+    .team { min-width: 0; }
+    .team.right { text-align: right; }
+    .name { font-weight: 700; font-size: .95rem; line-height: 1.2; }
+    .meta { color: var(--muted); font-size: .75rem; margin-top: 3px; }
+    .score { font-variant-numeric: tabular-nums; font-size: 1.25rem; font-weight: 800; }
+    .score.lead { color: var(--good); }
+    .vs { color: var(--muted); font-size: .7rem; text-align: center; }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .row:last-child { border-bottom: 0; }
+    .err { color: var(--bad); padding: 16px; }
+    .refresh { color: var(--muted); font-size: .75rem; padding: 0 16px 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Lana Straw</h1>
+    <div class="sub" id="status">Loading live scores…</div>
+  </header>
+  <div class="tabs">
+    <button class="tab active" data-view="scores">Live scores</button>
+    <button class="tab" data-view="standings">Standings</button>
+  </div>
+  <main id="app"></main>
+  <div class="refresh" id="stamp"></div>
+
+  <script>
+    const LEAGUE_ID = "1851323";
+    const SEASON = "2026";
+    const ESPN =
+      `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${SEASON}/segments/0/leagues/${LEAGUE_ID}?view=mTeam&view=mMatchupScore&view=mStatus`;
+    // Optional: after you deploy worker.js, put that URL here to skip public proxies.
+    const WORKER_URL = "";
+
+    let view = "scores";
+    let cache = null;
+
+    document.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        view = btn.dataset.view;
+        document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+        render();
+      });
+    });
+
+    function teamName(t) {
+      return (t?.name || `${t?.location || ""} ${t?.nickname || ""}`.trim() || `Team ${t?.id}`).trim();
+    }
+
+    function record(t) {
+      const r = t?.record?.overall || {};
+      return `${r.wins || 0}-${r.losses || 0}${r.ties ? `-${r.ties}` : ""}`;
+    }
+
+    function sideScore(side, week) {
+      if (typeof side.totalPointsLive === "number" && side.totalPointsLive > 0) return side.totalPointsLive;
+      const by = side.pointsByScoringPeriod || {};
+      if (by[week] != null) return by[week];
+      return side.totalPoints || 0;
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }
+
+    async function loadLeague() {
+      const urls = [];
+      if (WORKER_URL) urls.push(`${WORKER_URL}?leagueId=${LEAGUE_ID}&season=${SEASON}`);
+      urls.push(ESPN);
+      urls.push("https://corsproxy.io/?" + encodeURIComponent(ESPN));
+      urls.push("https://api.allorigins.win/raw?url=" + encodeURIComponent(ESPN));
+
+      let lastErr;
+      for (const url of urls) {
+        try {
+          const data = await fetchJson(url);
+          if (data && data.teams) return data;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr || new Error("Could not load league");
+    }
+
+    function render() {
+      if (!cache) return;
+      const week = cache.status?.currentMatchupPeriod;
+      const teams = Object.fromEntries((cache.teams || []).map((t) => [t.id, t]));
+      const app = document.getElementById("app");
+      document.getElementById("status").textContent = `Week ${week} · public league ${LEAGUE_ID}`;
+
+      if (view === "standings") {
+        const ranked = [...(cache.teams || [])].sort((a, b) => {
+          const ra = a.record?.overall || {};
+          const rb = b.record?.overall || {};
+          return (rb.percentage || 0) - (ra.percentage || 0) || (rb.pointsFor || 0) - (ra.pointsFor || 0);
+        });
+        app.innerHTML = ranked.map((t, i) => `
+          <div class="card row">
+            <div>
+              <div class="name">${i + 1}. ${teamName(t)}</div>
+              <div class="meta">${record(t)} · PF ${Number(t.record?.overall?.pointsFor || 0).toFixed(1)}</div>
+            </div>
+            <div class="score">${Number(t.record?.overall?.pointsFor || 0).toFixed(1)}</div>
+          </div>
+        `).join("");
+        return;
+      }
+
+      const matchups = (cache.schedule || []).filter((m) => m.matchupPeriodId === week);
+      app.innerHTML = matchups.map((m) => {
+        const home = teams[m.home.teamId];
+        const away = teams[m.away.teamId];
+        const hs = sideScore(m.home, week);
+        const as = sideScore(m.away, week);
+        return `
+          <article class="card">
+            <div class="match">
+              <div class="team">
+                <div class="name">${teamName(home)}</div>
+                <div class="meta">${record(home)}</div>
+              </div>
+              <div class="vs">
+                <div class="score ${hs > as ? "lead" : ""}">${hs.toFixed(1)}</div>
+                <div>vs</div>
+                <div class="score ${as > hs ? "lead" : ""}">${as.toFixed(1)}</div>
+              </div>
+              <div class="team right">
+                <div class="name">${teamName(away)}</div>
+                <div class="meta">${record(away)}</div>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    async function refresh() {
+      try {
+        cache = await loadLeague();
+        render();
+        document.getElementById("stamp").textContent =
+          "Updated " + new Date().toLocaleTimeString() + " · refreshes every 45s";
+      } catch (err) {
+        document.getElementById("app").innerHTML =
+          `<div class="err">Could not load scores. If this is on GitHub Pages, deploy worker.js or try again. ${err.message}</div>`;
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 45000);
+  </script>
+</body>
+</html>
