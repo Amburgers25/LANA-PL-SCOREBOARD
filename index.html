@@ -123,12 +123,35 @@
     .row:last-child { border-bottom: 0; }
     .err { color: var(--bad); padding: 16px; }
     .refresh { color: var(--muted); font-size: .75rem; padding: 0 16px 20px; }
+    .weekbar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 8px 16px 0;
+    }
+    .weekbar button {
+      border: 0;
+      background: var(--card);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-weight: 700;
+    }
+    .weekbar button:disabled { opacity: .35; }
+    .weeklabel { font-weight: 800; min-width: 92px; text-align: center; }
+    .weeklabel span { display: block; color: var(--muted); font-size: .7rem; font-weight: 600; }
   </style>
 </head>
 <body>
   <header>
     <h1>Lana Straw</h1>
     <div class="sub" id="status">Loading live scores…</div>
+    <div class="weekbar">
+      <button id="prevWeek">‹ Prev</button>
+      <div class="weeklabel" id="weekLabel">Week</div>
+      <button id="nextWeek">Next ›</button>
+    </div>
   </header>
   <div class="tabs">
     <button class="tab active" data-view="scores">Live scores</button>
@@ -153,6 +176,9 @@
     let cache = null;
     let nflByTeam = {};
     let openId = null;
+    let selectedWeek = null;
+    let currentWeek = null;
+    const weekCache = {};
     const NFL_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 
     document.querySelectorAll(".tab").forEach((btn) => {
@@ -163,6 +189,9 @@
         render();
       });
     });
+    document.getElementById("prevWeek").addEventListener("click", () => changeWeek(-1));
+    document.getElementById("nextWeek").addEventListener("click", () => changeWeek(1));
+
     document.getElementById("benchBtn").addEventListener("click", (e) => {
       showBench = !showBench;
       e.target.classList.toggle("on", showBench);
@@ -175,7 +204,8 @@
         view: "mBoxscore",
       });
       // multiple views
-      return `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${SEASON}/segments/0/leagues/${LEAGUE_ID}?view=mTeam&view=mMatchupScore&view=mBoxscore&view=mStatus&scoringPeriodId=${week || 2}`;
+      const weekQ = week ? `&scoringPeriodId=${week}` : "";
+      return `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${SEASON}/segments/0/leagues/${LEAGUE_ID}?view=mTeam&view=mMatchupScore&view=mBoxscore&view=mStatus${weekQ}`;
     }
 
     function teamName(t) {
@@ -252,11 +282,19 @@
       return map;
     }
 
-    async function loadLeague() {
-      const weekGuess = cache?.status?.currentMatchupPeriod || 2;
-      const ESPN = espnUrl(weekGuess);
+    async function changeWeek(delta) {
+      if (!currentWeek || selectedWeek == null) return;
+      const next = selectedWeek + delta;
+      if (next < 1 || next > currentWeek) return;
+      selectedWeek = next;
+      openId = null;
+      await refresh(false);
+    }
+
+    async function loadLeague(week) {
+      const ESPN = espnUrl(week);
       const urls = [];
-      if (WORKER_URL) urls.push(`${WORKER_URL}?leagueId=${LEAGUE_ID}&season=${SEASON}&week=${weekGuess}`);
+      if (WORKER_URL) urls.push(`${WORKER_URL}?leagueId=${LEAGUE_ID}&season=${SEASON}&week=${week || ""}`);
       urls.push(ESPN);
       urls.push("https://corsproxy.io/?" + encodeURIComponent(ESPN));
       urls.push("https://api.allorigins.win/raw?url=" + encodeURIComponent(ESPN));
@@ -290,6 +328,7 @@
     }
 
     function teamLiveBadge(side, align) {
+      if (selectedWeek !== currentWeek) return "";
       const n = liveStarters(side).length;
       if (!n) return "";
       const label = n === 1 ? "1 playing" : `${n} playing`;
@@ -301,7 +340,7 @@
       const slot = entry.lineupSlotId;
       const bench = isBench(slot);
       const game = gameStatus(entry);
-      const live = game?.state === "in";
+      const live = selectedWeek === currentWeek && game?.state === "in";
       const badge = live ? `<span class="live">LIVE</span>` : "";
       const clock = live ? `<div class="gclock">${game.clock}</div>` : "";
       const name = playerName(entry);
@@ -328,10 +367,16 @@
 
     function render() {
       if (!cache) return;
-      const week = cache.status?.currentMatchupPeriod;
+      const week = selectedWeek || cache.status?.currentMatchupPeriod;
       const teams = Object.fromEntries((cache.teams || []).map((t) => [t.id, t]));
       const app = document.getElementById("app");
-      document.getElementById("status").textContent = `Week ${week} · live player scoring`;
+      const isLiveWeek = week === currentWeek;
+      document.getElementById("status").textContent = isLiveWeek
+        ? `Week ${week} · live player scoring`
+        : `Week ${week} · final scores`;
+      document.getElementById("weekLabel").innerHTML = `Week ${week}${isLiveWeek ? "<span>current</span>" : "<span>final</span>"}`;
+      document.getElementById("prevWeek").disabled = week <= 1;
+      document.getElementById("nextWeek").disabled = !currentWeek || week >= currentWeek;
 
       if (view === "standings") {
         const ranked = [...(cache.teams || [])].sort((a, b) => {
@@ -392,20 +437,25 @@
       });
     }
 
-    async function refresh() {
+    async function refresh(auto) {
       try {
-        cache = await loadLeague();
+        if (auto && selectedWeek && currentWeek && selectedWeek !== currentWeek) return;
+        const weekToLoad = selectedWeek;
+        cache = await loadLeague(weekToLoad);
+        currentWeek = cache.status?.currentMatchupPeriod || currentWeek;
+        if (selectedWeek == null) selectedWeek = currentWeek;
+        weekCache[selectedWeek] = cache;
         render();
         document.getElementById("stamp").textContent =
-          "Updated " + new Date().toLocaleTimeString() + " · refreshes every 45s";
+          "Updated " + new Date().toLocaleTimeString() + (selectedWeek === currentWeek ? " · refreshes every 45s" : "");
       } catch (err) {
         document.getElementById("app").innerHTML =
           `<div class="err">Could not load scores. ${err.message}</div>`;
       }
     }
 
-    refresh();
-    setInterval(refresh, 45000);
+    refresh(false);
+    setInterval(() => refresh(true), 45000);
   </script>
 </body>
 </html>
