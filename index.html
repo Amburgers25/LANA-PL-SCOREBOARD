@@ -285,6 +285,17 @@
       return nflByTeam[id] || null;
     }
 
+    function liveStarters(side) {
+      return lineup(side).filter((e) => !isBench(e.lineupSlotId) && gameStatus(e)?.state === "in");
+    }
+
+    function teamLiveBadge(side, align) {
+      const n = liveStarters(side).length;
+      if (!n) return "";
+      const label = n === 1 ? "1 playing" : `${n} playing`;
+      return `<div class="${align === "right" ? "meta" : "meta"}"><span class="live">LIVE</span> <span class="gclock">${label}</span></div>`;
+    }
+
     function playerCell(entry, align) {
       if (!entry) return `<div class="p ${align}"></div>`;
       const slot = entry.lineupSlotId;
@@ -353,6 +364,7 @@
               <div class="team">
                 <div class="name">${teamName(home)}</div>
                 <div class="meta">${record(home)}</div>
+                ${teamLiveBadge(m.home)}
                 <div class="score ${hs > as ? "lead" : ""}">${hs.toFixed(1)}</div>
                 <div class="proj">proj ${sideProj(m.home).toFixed(1)}</div>
               </div>
@@ -360,6 +372,7 @@
               <div class="team right">
                 <div class="name">${teamName(away)}</div>
                 <div class="meta">${record(away)}</div>
+                ${teamLiveBadge(m.away, "right")}
                 <div class="score ${as > hs ? "lead" : ""}">${as.toFixed(1)}</div>
                 <div class="proj">proj ${sideProj(m.away).toFixed(1)}</div>
               </div>
