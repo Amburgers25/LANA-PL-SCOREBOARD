@@ -17,6 +17,7 @@
       --good: #3dd68c;
       --bad: #ff6b7a;
       --accent: #7aa2ff;
+      --bench: #6d7b96;
     }
     * { box-sizing: border-box; }
     body {
@@ -30,17 +31,13 @@
       padding: 18px 16px 8px;
       position: sticky;
       top: 0;
-      background: linear-gradient(180deg, #0b1220 70%, transparent);
+      background: linear-gradient(180deg, #0b1220 85%, transparent);
       z-index: 2;
     }
     h1 { font-size: 1.15rem; margin: 0; letter-spacing: .02em; }
     .sub { color: var(--muted); font-size: .82rem; margin-top: 4px; }
-    .tabs {
-      display: flex;
-      gap: 8px;
-      padding: 10px 16px 0;
-    }
-    button.tab {
+    .tabs { display: flex; gap: 8px; padding: 10px 16px 0; }
+    button.tab, button.toggle {
       border: 0;
       background: var(--card);
       color: var(--text);
@@ -48,8 +45,8 @@
       padding: 8px 14px;
       font-weight: 600;
     }
-    button.tab.active { background: var(--accent); color: #081018; }
-    main { padding: 12px 16px 32px; display: grid; gap: 10px; }
+    button.tab.active, button.toggle.on { background: var(--accent); color: #081018; }
+    main { padding: 12px 16px 32px; display: grid; gap: 12px; }
     .card {
       background: var(--card);
       border: 1px solid var(--line);
@@ -66,9 +63,43 @@
     .team.right { text-align: right; }
     .name { font-weight: 700; font-size: .95rem; line-height: 1.2; }
     .meta { color: var(--muted); font-size: .75rem; margin-top: 3px; }
-    .score { font-variant-numeric: tabular-nums; font-size: 1.25rem; font-weight: 800; }
+    .score { font-variant-numeric: tabular-nums; font-size: 1.35rem; font-weight: 800; }
     .score.lead { color: var(--good); }
+    .proj { color: var(--muted); font-size: .7rem; font-weight: 600; }
     .vs { color: var(--muted); font-size: .7rem; text-align: center; }
+    .expand {
+      margin-top: 10px;
+      width: 100%;
+      border: 0;
+      background: #1c2b45;
+      color: var(--accent);
+      border-radius: 10px;
+      padding: 8px;
+      font-weight: 700;
+    }
+    .players { margin-top: 10px; display: grid; gap: 6px; }
+    .prow {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      padding-top: 6px;
+    }
+    .p {
+      min-width: 0;
+    }
+    .p.right { text-align: right; }
+    .pos {
+      display: inline-block;
+      font-size: .65rem;
+      font-weight: 800;
+      color: var(--accent);
+      min-width: 28px;
+    }
+    .pname { font-size: .8rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ppts { font-variant-numeric: tabular-nums; font-size: .85rem; font-weight: 800; }
+    .pmeta { color: var(--muted); font-size: .68rem; }
+    .bench .pname, .bench .ppts { color: var(--bench); }
     .row {
       display: flex;
       justify-content: space-between;
@@ -78,7 +109,7 @@
     }
     .row:last-child { border-bottom: 0; }
     .err { color: var(--bad); padding: 16px; }
-    .refresh { color: var(--muted); font-size: .75rem; padding: 0 16px 16px; }
+    .refresh { color: var(--muted); font-size: .75rem; padding: 0 16px 20px; }
   </style>
 </head>
 <body>
@@ -89,6 +120,7 @@
   <div class="tabs">
     <button class="tab active" data-view="scores">Live scores</button>
     <button class="tab" data-view="standings">Standings</button>
+    <button class="toggle" id="benchBtn">Show bench</button>
   </div>
   <main id="app"></main>
   <div class="refresh" id="stamp"></div>
@@ -96,36 +128,80 @@
   <script>
     const LEAGUE_ID = "1851323";
     const SEASON = "2026";
-    const ESPN =
-      `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${SEASON}/segments/0/leagues/${LEAGUE_ID}?view=mTeam&view=mMatchupScore&view=mStatus`;
-    // Optional: after you deploy worker.js, put that URL here to skip public proxies.
     const WORKER_URL = "";
+    const SLOT = {
+      0: "QB", 2: "RB", 3: "RB/WR", 4: "WR", 5: "WR/TE", 6: "TE",
+      7: "OP", 16: "D/ST", 17: "K", 20: "BE", 21: "IR", 23: "FLEX"
+    };
+    const SLOT_ORDER = [0, 2, 4, 6, 23, 3, 5, 7, 16, 17, 20, 21];
 
     let view = "scores";
+    let showBench = false;
     let cache = null;
+    let openId = null;
 
     document.querySelectorAll(".tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         view = btn.dataset.view;
         document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+        document.getElementById("benchBtn").style.display = view === "scores" ? "" : "none";
         render();
       });
     });
+    document.getElementById("benchBtn").addEventListener("click", (e) => {
+      showBench = !showBench;
+      e.target.classList.toggle("on", showBench);
+      e.target.textContent = showBench ? "Hide bench" : "Show bench";
+      render();
+    });
 
-    function teamName(t) {
-      return (t?.name || `${t?.location || ""} ${t?.nickname || ""}`.trim() || `Team ${t?.id}`).trim();
+    function espnUrl(week) {
+      const q = new URLSearchParams({
+        view: "mBoxscore",
+      });
+      // multiple views
+      return `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${SEASON}/segments/0/leagues/${LEAGUE_ID}?view=mTeam&view=mMatchupScore&view=mBoxscore&view=mStatus&scoringPeriodId=${week || 2}`;
     }
 
+    function teamName(t) {
+      return (t?.name || `Team ${t?.id}`).trim();
+    }
     function record(t) {
       const r = t?.record?.overall || {};
       return `${r.wins || 0}-${r.losses || 0}${r.ties ? `-${r.ties}` : ""}`;
     }
-
     function sideScore(side, week) {
       if (typeof side.totalPointsLive === "number" && side.totalPointsLive > 0) return side.totalPointsLive;
       const by = side.pointsByScoringPeriod || {};
       if (by[week] != null) return by[week];
       return side.totalPoints || 0;
+    }
+    function sideProj(side) {
+      return side.totalProjectedPointsLive || side.totalProjectedPoints || 0;
+    }
+    function playerPts(entry) {
+      return Number(entry?.playerPoolEntry?.appliedStatTotal || 0);
+    }
+    function playerProj(entry) {
+      const stats = entry?.playerPoolEntry?.player?.stats || [];
+      const proj = stats.find((s) => s.statSourceId === 1);
+      return Number(proj?.appliedTotal || 0);
+    }
+    function playerName(entry) {
+      return entry?.playerPoolEntry?.player?.fullName || "Unknown";
+    }
+    function isBench(slot) {
+      return slot === 20 || slot === 21;
+    }
+    function lineup(side) {
+      const entries = side?.rosterForCurrentScoringPeriod?.entries
+        || side?.rosterForMatchupPeriod?.entries
+        || [];
+      return entries.slice().sort((a, b) => {
+        const ao = SLOT_ORDER.indexOf(a.lineupSlotId);
+        const bo = SLOT_ORDER.indexOf(b.lineupSlotId);
+        return (ao < 0 ? 99 : ao) - (bo < 0 ? 99 : bo);
+      });
     }
 
     async function fetchJson(url) {
@@ -135,12 +211,13 @@
     }
 
     async function loadLeague() {
+      const weekGuess = cache?.status?.currentMatchupPeriod || 2;
+      const ESPN = espnUrl(weekGuess);
       const urls = [];
-      if (WORKER_URL) urls.push(`${WORKER_URL}?leagueId=${LEAGUE_ID}&season=${SEASON}`);
+      if (WORKER_URL) urls.push(`${WORKER_URL}?leagueId=${LEAGUE_ID}&season=${SEASON}&week=${weekGuess}`);
       urls.push(ESPN);
       urls.push("https://corsproxy.io/?" + encodeURIComponent(ESPN));
       urls.push("https://api.allorigins.win/raw?url=" + encodeURIComponent(ESPN));
-
       let lastErr;
       for (const url of urls) {
         try {
@@ -153,12 +230,34 @@
       throw lastErr || new Error("Could not load league");
     }
 
+    function playerCell(entry, align) {
+      if (!entry) return `<div class="p ${align}"></div>`;
+      const slot = entry.lineupSlotId;
+      const bench = isBench(slot);
+      return `
+        <div class="p ${align}${bench ? " bench" : ""}">
+          <div class="pname">${align === "right" ? "" : `<span class="pos">${SLOT[slot] || ""}</span> `}${playerName(entry)}${align === "right" ? ` <span class="pos">${SLOT[slot] || ""}</span>` : ""}</div>
+          <div class="pmeta">${playerPts(entry).toFixed(1)} pts · proj ${playerProj(entry).toFixed(1)}</div>
+        </div>`;
+    }
+
+    function renderPlayers(homeEntries, awayEntries) {
+      const h = homeEntries.filter((e) => showBench || !isBench(e.lineupSlotId));
+      const a = awayEntries.filter((e) => showBench || !isBench(e.lineupSlotId));
+      const n = Math.max(h.length, a.length);
+      let html = `<div class="players">`;
+      for (let i = 0; i < n; i++) {
+        html += `<div class="prow">${playerCell(h[i], "")}${playerCell(a[i], "right")}</div>`;
+      }
+      return html + `</div>`;
+    }
+
     function render() {
       if (!cache) return;
       const week = cache.status?.currentMatchupPeriod;
       const teams = Object.fromEntries((cache.teams || []).map((t) => [t.id, t]));
       const app = document.getElementById("app");
-      document.getElementById("status").textContent = `Week ${week} · public league ${LEAGUE_ID}`;
+      document.getElementById("status").textContent = `Week ${week} · live player scoring`;
 
       if (view === "standings") {
         const ranked = [...(cache.teams || [])].sort((a, b) => {
@@ -184,6 +283,7 @@
         const away = teams[m.away.teamId];
         const hs = sideScore(m.home, week);
         const as = sideScore(m.away, week);
+        const open = openId === m.id;
         return `
           <article class="card">
             <div class="match">
@@ -193,17 +293,29 @@
               </div>
               <div class="vs">
                 <div class="score ${hs > as ? "lead" : ""}">${hs.toFixed(1)}</div>
+                <div class="proj">proj ${sideProj(m.home).toFixed(1)}</div>
                 <div>vs</div>
                 <div class="score ${as > hs ? "lead" : ""}">${as.toFixed(1)}</div>
+                <div class="proj">proj ${sideProj(m.away).toFixed(1)}</div>
               </div>
               <div class="team right">
                 <div class="name">${teamName(away)}</div>
                 <div class="meta">${record(away)}</div>
               </div>
             </div>
+            <button class="expand" data-id="${m.id}">${open ? "Hide players" : "Show players"}</button>
+            ${open ? renderPlayers(lineup(m.home), lineup(m.away)) : ""}
           </article>
         `;
       }).join("");
+
+      app.querySelectorAll(".expand").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = Number(btn.dataset.id);
+          openId = openId === id ? null : id;
+          render();
+        });
+      });
     }
 
     async function refresh() {
@@ -214,7 +326,7 @@
           "Updated " + new Date().toLocaleTimeString() + " · refreshes every 45s";
       } catch (err) {
         document.getElementById("app").innerHTML =
-          `<div class="err">Could not load scores. If this is on GitHub Pages, deploy worker.js or try again. ${err.message}</div>`;
+          `<div class="err">Could not load scores. ${err.message}</div>`;
       }
     }
 
