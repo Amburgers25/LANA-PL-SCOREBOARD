@@ -100,6 +100,19 @@
     .ppts { font-variant-numeric: tabular-nums; font-size: 1.05rem; font-weight: 800; margin-top: 2px; }
     .pproj { color: var(--muted); font-size: .65rem; font-weight: 500; opacity: .75; }
     .bench .pname, .bench .ppts { color: var(--bench); }
+    .live {
+      display: inline-block;
+      margin-left: 4px;
+      background: #e11d48;
+      color: #fff;
+      font-size: .58rem;
+      font-weight: 800;
+      letter-spacing: .04em;
+      border-radius: 999px;
+      padding: 1px 5px;
+      vertical-align: middle;
+    }
+    .gclock { color: #fca5a5; font-size: .62rem; font-weight: 700; }
     .row {
       display: flex;
       justify-content: space-between;
@@ -138,7 +151,9 @@
     let view = "scores";
     let showBench = false;
     let cache = null;
+    let nflByTeam = {};
     let openId = null;
+    const NFL_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 
     document.querySelectorAll(".tab").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -210,6 +225,33 @@
       return res.json();
     }
 
+    async function loadWithFallback(primary) {
+      const urls = [primary, "https://corsproxy.io/?" + encodeURIComponent(primary), "https://api.allorigins.win/raw?url=" + encodeURIComponent(primary)];
+      let lastErr;
+      for (const url of urls) {
+        try {
+          return await fetchJson(url);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr || new Error("fetch failed");
+    }
+
+    function parseNflGames(data) {
+      const map = {};
+      for (const ev of data.events || []) {
+        const comp = ev.competitions?.[0];
+        if (!comp) continue;
+        const st = comp.status?.type || {};
+        const clock = st.shortDetail || st.detail || "";
+        for (const c of comp.competitors || []) {
+          map[String(c.team?.id)] = { state: st.state, clock };
+        }
+      }
+      return map;
+    }
+
     async function loadLeague() {
       const weekGuess = cache?.status?.currentMatchupPeriod || 2;
       const ESPN = espnUrl(weekGuess);
@@ -219,24 +261,44 @@
       urls.push("https://corsproxy.io/?" + encodeURIComponent(ESPN));
       urls.push("https://api.allorigins.win/raw?url=" + encodeURIComponent(ESPN));
       let lastErr;
+      let data;
       for (const url of urls) {
         try {
-          const data = await fetchJson(url);
-          if (data && data.teams) return data;
+          data = await fetchJson(url);
+          if (data && data.teams) break;
         } catch (err) {
           lastErr = err;
         }
       }
-      throw lastErr || new Error("Could not load league");
+      if (!data || !data.teams) throw lastErr || new Error("Could not load league");
+      try {
+        const nfl = await loadWithFallback(NFL_SCOREBOARD);
+        nflByTeam = parseNflGames(nfl);
+      } catch (e) {
+        nflByTeam = nflByTeam || {};
+      }
+      return data;
+    }
+
+    function gameStatus(entry) {
+      const id = String(entry?.playerPoolEntry?.player?.proTeamId || "");
+      return nflByTeam[id] || null;
     }
 
     function playerCell(entry, align) {
       if (!entry) return `<div class="p ${align}"></div>`;
       const slot = entry.lineupSlotId;
       const bench = isBench(slot);
+      const game = gameStatus(entry);
+      const live = game?.state === "in";
+      const badge = live ? `<span class="live">LIVE</span>` : "";
+      const clock = live ? `<div class="gclock">${game.clock}</div>` : "";
+      const name = playerName(entry);
+      const pos = `<span class="pos">${SLOT[slot] || ""}</span>`;
       return `
         <div class="p ${align}${bench ? " bench" : ""}">
-          <div class="pname">${align === "right" ? "" : `<span class="pos">${SLOT[slot] || ""}</span> `}${playerName(entry)}${align === "right" ? ` <span class="pos">${SLOT[slot] || ""}</span>` : ""}</div>
+          <div class="pname">${align === "right" ? `${name} ${badge} ${pos}` : `${pos} ${name} ${badge}`}</div>
+          ${clock}
           <div class="ppts">${playerPts(entry).toFixed(1)}</div>
           <div class="pproj">proj ${playerProj(entry).toFixed(1)}</div>
         </div>`;
