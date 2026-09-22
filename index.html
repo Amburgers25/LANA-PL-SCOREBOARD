@@ -97,8 +97,8 @@
       min-width: 28px;
     }
     .pname { font-size: .8rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .ppts { font-variant-numeric: tabular-nums; font-size: .85rem; font-weight: 800; }
-    .pmeta { color: var(--muted); font-size: .68rem; }
+    .ppts { font-variant-numeric: tabular-nums; font-size: 1.05rem; font-weight: 800; margin-top: 2px; }
+    .pproj { color: var(--muted); font-size: .65rem; font-weight: 500; opacity: .75; }
     .bench .pname, .bench .ppts { color: var(--bench); }
     .row {
       display: flex;
@@ -237,7 +237,8 @@
       return `
         <div class="p ${align}${bench ? " bench" : ""}">
           <div class="pname">${align === "right" ? "" : `<span class="pos">${SLOT[slot] || ""}</span> `}${playerName(entry)}${align === "right" ? ` <span class="pos">${SLOT[slot] || ""}</span>` : ""}</div>
-          <div class="pmeta">${playerPts(entry).toFixed(1)} pts · proj ${playerProj(entry).toFixed(1)}</div>
+          <div class="ppts">${playerPts(entry).toFixed(1)}</div>
+          <div class="pproj">proj ${playerProj(entry).toFixed(1)}</div>
         </div>`;
     }
 
